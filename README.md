@@ -5,4 +5,5 @@ The code in this package processes seismic, acoustic, and in situ data to infer 
 3. Find P-wave pairs at the reference stations.
 4. Cross-correlate the waveforms of the identified P-wave pairs at the T-wave station. 
 5. Invert the measured travel time changes for travel time anomalies and apply a cycle skipping correction.
+   
 With Gaussian process modeling, parameters in prior covariances are determined by a maximum likelihood estimator. Other functions includes joint inversion with in situ data.
