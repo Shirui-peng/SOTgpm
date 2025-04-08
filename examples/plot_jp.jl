@@ -1,5 +1,5 @@
 include("../src/SOT.jl")
-using .SOT, PyCall, Printf, LinearAlgebra, Dates, HDF5, DataFrames, CSV, Statistics
+using .SOT, PyCall, Printf, LinearAlgebra, Dates, HDF5, DataFrames, CSV, Statistics, StatsBase
 using Random, Distributions, SparseArrays, PyPlot, Interpolations,NCDatasets,HCubature
 PyPlot.matplotlib[:rc]("mathtext",fontset="cm")        #computer modern font 
 PyPlot.matplotlib[:rc]("font",family="STIXGeneral")
@@ -33,7 +33,7 @@ ntrg = length(trg)
 # plot distribution of in situ data
 t0,t1,x0,y0,z0 = DateTime(1997,5,6),DateTime(2021,12,31),141,36,-1.9e3
 labels = ["shipboard CTDs", "Argo profiles"]
-fig,ax=subplots(figsize=(190/25.4, 190/25.4/2.5))
+fig,ax=subplots(2,1,figsize=(190/25.4, 190/25.4/2),sharex=true)
 c2 = ["k","tab:red"]
 for (i,file) in enumerate([ctdfile,argofile])
     floats = CSV.read(file, DataFrame)[:,1:7]
@@ -49,25 +49,72 @@ for (i,file) in enumerate([ctdfile,argofile])
     edges = DateTime.([df.t_year; max(df.t_year...)+1]) 
     if i==1
         df.count[1] = round(365/240*df.count[1])
-        ax.set_xlim([edges[1],edges[end]])
+        ax[2].set_xlim([edges[1],edges[end]])
     end
     
-    label0 = @sprintf("%s, \${135^\\circ}\$E to \${170^\\circ}\$E, \${15^\\circ}\$N to \${45^\\circ}\$N",labels[i]) 
-    p1 = ax.stairs((df.count),edges,color=c2[i],label=label0)
+    label0 = @sprintf("%s",labels[i]) 
+    p1 = ax[1].stairs((df.count),edges,color=c2[i],label=label0)
     a0 = SOT.azimuth.(tstations[1][2],tstations[1][1],evtpos[2],evtpos[1])
     floats.a = SOT.azimuth.(tstations[1][2],tstations[1][1],floats.y,floats.x) .- a0
     floats = floats[θ1.<= floats.a .<= θ2,:]
     df = combine(groupby(transform(floats, :t => ByRow(year)), :t_year), nrow=>:count)
     edges = DateTime.([df.t_year; max(df.t_year...)+1]) 
-    p2 = ax.stairs((df.count),edges,color=c2[i],ls="dashed",label=@sprintf("%s, circular sector to H11",labels[i]))
+    p2 = ax[2].stairs((df.count),edges,color=c2[i],label=@sprintf("%s",labels[i]))
 
+    ax[i].set_ylim([1,1e4])
+    ax[i].set_ylabel("count")
+    ax[i].set_yscale("log")
 end
-ax.legend(frameon=false,loc="lower center")
-ax.set_ylim([1,1e4])
-ax.set_ylabel("count")
-ax.set_yscale("log")
+ax[1].set_title("\${135^\\circ}\$E to \${170^\\circ}\$E, \${15^\\circ}\$N to \${45^\\circ}\$N")
+ax[2].set_title("circular sector to H11")
+ax[1].set_title("(a)",loc="left")
+ax[2].set_title("(b)",loc="left")
+ax[1].legend(frameon=false,loc="upper left")
 fig.tight_layout()
 fig.savefig("results/argo/point_time.pdf",bbox_inches="tight",dpi=300)
+
+@printf("Now plot quantiles...\n")
+p = 0.5:0.5:99.5
+α = 0.05
+zτh = h5read("results/argo/argotris_H11.h5", "zτ")
+zτw = h5read("results/argo/argotris_WAKE.h5", "zτ")
+ziP = h5read("results/argo/argotris_ctd.h5", "zs")
+println([std(zτh),std(zτw),std(ziP)])
+qsc = percentile(ziP,p)
+qs4,qs5 = percentile(zτh,p),percentile(zτw,p)
+qt = quantile.(Normal(), p/100)
+lb,ub = zeros(length(p),3),zeros(length(p),3)
+for i = 1:length(p)
+    for (j,nt) in enumerate([length(ziP),length(zτh),length(zτw)])
+        d = NoncentralT(nt-1,-sqrt(nt)*qt[i])
+        lb[i,j],ub[i,j] = -quantile(d, 1-α/2)/sqrt(nt),-quantile(d, α/2)/sqrt(nt)
+    end
+end
+rc("font", size=10)
+fig,ax=subplots(3,1,figsize=(4.8,4.8),sharex=true)
+c3 = ["#1b9e77","#d95f02","#7570b3"]
+ax[1].set_title("H11")
+ax[1].set_title("(a)",loc="left")
+ax[1].plot(qt,qs4-qt,label="H11",c=c3[1])
+ax[1].fill_between(qt, (lb[:,2]-qt), (ub[:,2]-qt), alpha=.2, zorder=3, color=c3[1], linewidth=0)
+ax[2].set_title("WAKE")
+ax[2].set_title("(b)",loc="left")
+ax[2].plot(qt,qs5-qt,label="WAKE",c=c3[2])
+ax[2].fill_between(qt, (lb[:,3]-qt), (ub[:,3]-qt), alpha=.2, zorder=3, color=c3[2], linewidth=0)
+ax[3].set_title("Shipboard CTD")
+ax[3].set_title("(c)",loc="left")
+ax[3].plot(qt,qsc-qt,label="shipboard CTD",c=c3[3])
+ax[3].fill_between(qt, (lb[:,1]-qt), (ub[:,1]-qt), alpha=.2, zorder=3, color=c3[3], linewidth=0)
+#ax.axhline(0,color="black",ls=":",lw=1)
+ax[3].set_xlabel("theoretical quantile")
+ax[2].set_ylabel("sample quantile \$-\$ theoretical quantile")
+#fig.text(0.01, 0.5, "sample quantile \$-\$ theoretical quantile", va="center", rotation="vertical")
+#ax.legend(frameon=false)
+ax[1].set_ylim([-0.5,0.5])
+ax[2].set_ylim([-0.5,0.5])
+ax[3].set_xlim([qt[1],qt[end]])
+fig.tight_layout()
+fig.savefig("results/argo/quantile3_kuroshio.pdf",bbox_inches="tight",dpi=300)
 
 # plot path-mean temperature anomalies
 @printf("max %.2e, min %.2e\n",max(Δsrg...),min(Δsrg...))
@@ -144,13 +191,14 @@ for (i,file) in enumerate(flnms)
     ax[2*i].plot(te,vat,color="tab:green", linewidth=1)
     ax[2*i].set_ylabel("variance (\$\\mathrm{K}^2\$)")
     ax[2*i].set_xlim([te[1],te[end]])
-    ax[2*i-1].set_title("($(('a':'z')[2*i-i]))", loc="left")
     ax[2*i].set_title("($(('a':'z')[2*i]))", loc="left")
     if i==1
+      ax[1].set_title("(a)", loc="left")
       ax[1].legend([p1, p2, p3], ["conventional","seismic","combined"], ncol=3, loc="upper center", frameon=false)
     #  ax[2].legend([p4,p5],["stochastic prior","full prior"],ncol=2,loc="upper center",frameon=false)
     end
 end
+ax[3].set_title("(c)", loc="left")
 ax[1].set_title("\$\\theta={316.5^\\circ}\$ to H11")
 ax[3].set_title("\$\\theta={317.1^\\circ}\$ to WAKE")
 fig.align_ylabels()
@@ -242,9 +290,9 @@ for (i,receiver) in enumerate(["H11","WAKE"])
     ax[2*i].plot(te,vat,color="tab:green", linewidth=1)
     ax[2*i].set_ylabel("variance (\$\\mathrm{K}^2\$)")
     ax[2*i].set_xlim([te[1],te[end]])
-    ax[2*i-1].set_title("($(('a':'z')[2*i-i]))", loc="left")
     ax[2*i].set_title("($(('a':'z')[2*i]))", loc="left")
     if i==1
+      ax[1].set_title("(a)", loc="left")
       ax[1].legend([p1, p2, p3], ["conventional","seismic","combined"], ncol=3, loc="upper center", frameon=false)
       #ax[2].legend([p4,p5],["stochastic prior","full prior"],ncol=2,loc="upper center",frameon=false)
     end
@@ -254,6 +302,7 @@ for (i,receiver) in enumerate(["H11","WAKE"])
         ax[2*i-1].set_title(@sprintf("Rectangular area to %s",receiver))
     end
 end
+ax[3].set_title("(c)", loc="left")
 fig.align_ylabels()
 fig.tight_layout()
 fig.savefig(@sprintf("results/argo/point_sbasin%s.pdf",shape),bbox_inches="tight",dpi=300)
@@ -360,17 +409,21 @@ axs[4,1].set_xlabel("longitude")
 axs[4,2].set_xlabel("longitude")
 fig.tight_layout()
 subplots_adjust(wspace=0.,hspace=0.2)
-y2,y1 = .8,.565
-cbaxes = fig.add_axes([0.16, y1, 0.08, 0.01]) 
-cbaxes.text(1.4, -2.4,"(K)")
-cbar = fig.colorbar(im1, cax=cbaxes, ticks=[-1,0,1], orientation="horizontal")
-cbaxes = fig.add_axes([0.62, y1, 0.08, 0.01]) 
-cbaxes.text(0.18, -2.4,"(K)")
-cbar = fig.colorbar(im2, cax=cbaxes, ticks=[0.03,0.14], orientation="horizontal")
-cbaxes = fig.add_axes([0.165, y2, 0.08, 0.01]) 
-cbaxes.text(atrend+25, -2.4,"(mK/yr)")
-cbar = fig.colorbar(im3, cax=cbaxes, ticks=[-atrend,0,atrend], orientation="horizontal")
-cbaxes = fig.add_axes([0.6, y2, 0.08, 0.01]) 
-cbaxes.text(17.5, -2.4,"(mK/yr)")
-cbar = fig.colorbar(im4, cax=cbaxes, ticks=[5,10,15], orientation="horizontal")
+y2,y1,dy = .795,.565,.465
+for y = [y1, y1-dy]
+  cbaxes = fig.add_axes([0.16, y, 0.08, 0.01]) 
+  cbaxes.text(1.4, -2.4,"(K)")
+  cbar = fig.colorbar(im1, cax=cbaxes, ticks=[-1,0,1], orientation="horizontal")
+  cbaxes = fig.add_axes([0.62, y, 0.08, 0.01]) 
+  cbaxes.text(0.18, -2.4,"(K)")
+  cbar = fig.colorbar(im2, cax=cbaxes, ticks=[0.03,0.14], orientation="horizontal")
+end
+for y = [y2, y2-dy]
+  cbaxes = fig.add_axes([0.165, y, 0.08, 0.01]) 
+  cbaxes.text(atrend+25, -2.4,"(mK/yr)")
+  cbar = fig.colorbar(im3, cax=cbaxes, ticks=[-atrend,0,atrend], orientation="horizontal")
+  cbaxes = fig.add_axes([0.6, y, 0.08, 0.01]) 
+  cbaxes.text(17.5, -2.4,"(mK/yr)")
+  cbar = fig.colorbar(im4, cax=cbaxes, ticks=[5,10,15], orientation="horizontal")
+end
 fig.savefig("results/argo/kuroshio_mt.pdf",bbox_inches="tight",dpi=300)
